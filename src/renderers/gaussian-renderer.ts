@@ -22,6 +22,17 @@ const createBuffer = (
   return buffer;
 };
 
+const minimal2DVertexBufferLayout: GPUVertexBufferLayout = {
+    arrayStride: 8,
+    attributes: [
+        {
+            format: "float32x2",
+            offset: 0,
+            shaderLocation: 0
+        }
+    ]
+}
+
 export default function get_renderer(
   pc: PointCloud,
   device: GPUDevice,
@@ -69,12 +80,13 @@ export default function get_renderer(
   // ===============================================
   //    Create Render Pipeline and Bind Groups
   // ===============================================
-  const render_shader = device.createShaderModule({code: pointcloud_wgsl});
+  const render_shader = device.createShaderModule({code: renderWGSL});
   const render_pipeline = device.createRenderPipeline({
     label: 'gaussian test render pipeline',
     layout: 'auto',
     vertex: {
       module: render_shader,
+      buffers: [minimal2DVertexBufferLayout],
       entryPoint: 'vs_main'
     },
     fragment: {
@@ -83,7 +95,7 @@ export default function get_renderer(
       targets: [{format: presentation_format }]
     },
     primitive: {
-      topology: 'point-list'
+      topology: 'triangle-list'
     }
   })
 
@@ -101,6 +113,20 @@ export default function get_renderer(
     ],
   });
 
+  const splat_buffer = device.createBuffer({
+    label: 'splat buffer',
+    size: pc.num_points * 48,
+    usage: GPUBufferUsage.STORAGE
+  });
+
+  const splat_bind_group = device.createBindGroup({
+    label: 'splats bind group',
+    layout: preprocess_pipeline.getBindGroupLayout(3),
+    entries: [
+      {binding: 0, resource: {buffer: splat_buffer }}
+    ]
+  });
+
   const indirect_buffer = device.createBuffer({
     label: 'indirect buffer',
     size: 16,
@@ -108,8 +134,24 @@ export default function get_renderer(
   });
 
   device.queue.writeBuffer(indirect_buffer, 0, new Uint32Array([
-    pc.num_points, 1, 0, 0 // NumVerts, NumInstances, StartVertex, StartInstance
+    6, pc.num_points, 0, 0 // NumVerts, NumInstances, StartVertex, StartInstance
   ])); // TODO make instances
+
+
+  const vertex_array = new Float32Array([
+    -1, -1,
+    1, -1,
+    1, 1,
+    -1, -1,
+    -1, 1,
+    1, 1
+  ]);
+  const vertex_buffer = device.createBuffer({
+    label: 'quad vertex buffer',
+    size: vertex_array.byteLength,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.VERTEX
+  });
+  device.queue.writeBuffer(vertex_buffer, 0, vertex_array);
 
   // ===============================================
   //    Command Encoder Functions
@@ -137,6 +179,8 @@ export default function get_renderer(
       pass.setPipeline(render_pipeline);
       pass.setBindGroup(0, camera_bind_group);
       pass.setBindGroup(1, gaussian_bind_group);
+
+      pass.setVertexBuffer(0, vertex_buffer);
 
       pass.drawIndirect(indirect_buffer, 0);
       pass.end();
