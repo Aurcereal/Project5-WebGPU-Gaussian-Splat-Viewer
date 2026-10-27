@@ -56,7 +56,7 @@ struct Gaussian {
 };
 
 struct Splat {
-    //TODO: store information for 2D splat rendering
+    a: f32//TODO: store information for 2D splat rendering
 };
 
 //TODO: bind your data here
