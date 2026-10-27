@@ -56,10 +56,18 @@ struct Gaussian {
 };
 
 struct Splat {
-    a: f32//TODO: store information for 2D splat rendering
+    temp_pos: vec4f,
+    cov_inv_2D: mat2x2f,//TODO: store information for 2D splat rendering
+    mean_2D: vec2<f32>
 };
 
 //TODO: bind your data here
+@group(0) @binding(0)
+var<uniform> camera: CameraUniforms;
+
+@group(1) @binding(0)
+var<storage,read> gaussians : array<Gaussian>;
+
 @group(2) @binding(0)
 var<storage, read_write> sort_infos: SortInfos;
 @group(2) @binding(1)
@@ -68,6 +76,9 @@ var<storage, read_write> sort_depths : array<u32>;
 var<storage, read_write> sort_indices : array<u32>;
 @group(2) @binding(3)
 var<storage, read_write> sort_dispatch: DispatchIndirect;
+
+@group(3) @binding(0)
+var<storage,read_write> splats : array<Splat>;
 
 /// reads the ith sh coef from the storage buffer 
 fn sh_coef(splat_idx: u32, c_idx: u32) -> vec3<f32> {
@@ -115,4 +126,24 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
 
     let keys_per_dispatch = workgroupSize * sortKeyPerThread; 
     // increment DispatchIndirect.dispatchx each time you reach limit for one dispatch of keys
+
+    // Get gaussian data
+    let gauss = gaussians[idx];
+
+    // Create splat
+    var splat : Splat = Splat();
+    let posXY = unpack2x16float(gauss.pos_opacity[0]);
+    let posZOpacity = unpack2x16float(gauss.pos_opacity[1]);
+    splat.temp_pos = vec4(posXY, posZOpacity.x, 1.0);
+
+    // Add splat data
+    let ind = atomicAdd(&sort_infos.keys_size, 1u);
+    splats[ind] = splat;
+    sort_indices[ind] = ind;
+    sort_depths[ind] = ind;
+
+    if(ind % keys_per_dispatch == 0) {
+        atomicAdd(&sort_dispatch.dispatch_x, 1u);
+    }
+    // todo: remember fill in indices and sort depth which I guess is just bitcast<float> since it maintains order
 }

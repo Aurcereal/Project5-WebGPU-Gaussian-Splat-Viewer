@@ -107,7 +107,7 @@ export default function get_renderer(
 
   const gaussian_bind_group = device.createBindGroup({
     label: 'point cloud gaussians',
-    layout: render_pipeline.getBindGroupLayout(1),
+    layout: render_pipeline.getBindGroupLayout(1), // layouts need to be exclusive so make the layout not owned by pipeline expilcitly deifne layouts
     entries: [
       {binding: 0, resource: { buffer: pc.gaussian_3d_buffer }},
     ],
@@ -163,6 +163,18 @@ export default function get_renderer(
   // ===============================================
   return {
     frame: (encoder: GPUCommandEncoder, texture_view: GPUTextureView) => {
+      const compute_pass = encoder.beginComputePass();
+      compute_pass.setPipeline(preprocess_pipeline);
+      compute_pass.setBindGroup(0, camera_bind_group);
+      compute_pass.setBindGroup(1, gaussian_bind_group);
+      compute_pass.setBindGroup(2, sort_bind_group);
+      compute_pass.setBindGroup(3, splat_bind_group);
+
+      const workgroupCount = Math.ceil(pc.num_points/C.histogram_wg_size);
+      compute_pass.dispatchWorkgroups(workgroupCount);
+
+      compute_pass.end();
+
       sorter.sort(encoder);
 
       const pass = encoder.beginRenderPass({
