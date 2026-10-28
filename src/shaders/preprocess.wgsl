@@ -134,10 +134,10 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
     var splat : Splat = Splat();
     let posXY = unpack2x16float(gauss.pos_opacity[0]);
     let posZOpacity = unpack2x16float(gauss.pos_opacity[1]);
-    splat.temp_pos = vec4(posXY, posZOpacity.x, 1.0);
+    splat.temp_pos = vec4(posXY, posZOpacity.x, 1.0)+camera.focal.x*0.00001;
 
     // Add splat data
-    let ind = atomicAdd(&sort_infos.keys_size, 1u);
+    let ind = 0u+sort_infos.passes % 2 ;//atomicAdd(&sort_infos.keys_size, 1u);
     splats[ind] = splat;
     sort_indices[ind] = ind;
     sort_depths[ind] = ind;

@@ -80,6 +80,27 @@ export default function get_renderer(
   // ===============================================
   //    Create Render Pipeline and Bind Groups
   // ===============================================
+  // const camera_bind_group_layout = device.createBindGroupLayout({
+  //   label: "camera bind group layout",
+  //   entries: [
+  //     { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.COMPUTE, buffer: {type: "uniform"}}
+  //   ]
+  // });
+
+  // const gaussian_bind_group_layout = device.createBindGroupLayout({
+  //   label: "gaussian bind group layout",
+  //   entries: [
+  //     { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.COMPUTE, buffer: {type: "storage"}}
+  //   ]
+  // });
+
+  // const splat_bind_group_layout = device.createBindGroupLayout({
+  //   label: "splat bind group layout",
+  //   entries: [
+  //     { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.COMPUTE, buffer: {type: "storage"}}
+  //   ]
+  // });
+
   const render_shader = device.createShaderModule({code: renderWGSL});
   const render_pipeline = device.createRenderPipeline({
     label: 'gaussian test render pipeline',
@@ -99,14 +120,28 @@ export default function get_renderer(
     }
   })
 
-  const camera_bind_group = device.createBindGroup({
-    label: 'point cloud camera',
+  const camera_bind_group_preprocess = device.createBindGroup({
+    label: 'point cloud camera preprocess',
+    layout: preprocess_pipeline.getBindGroupLayout(0),
+    entries: [{binding: 0, resource: { buffer: camera_buffer }}],
+  });
+
+  const camera_bind_group_render = device.createBindGroup({
+    label: 'point cloud camera render',
     layout: render_pipeline.getBindGroupLayout(0),
     entries: [{binding: 0, resource: { buffer: camera_buffer }}],
   });
 
-  const gaussian_bind_group = device.createBindGroup({
-    label: 'point cloud gaussians',
+  const gaussian_bind_group_preprocess = device.createBindGroup({
+    label: 'point cloud gaussians bind group preprocess',
+    layout: preprocess_pipeline.getBindGroupLayout(1), // layouts need to be exclusive so make the layout not owned by pipeline expilcitly deifne layouts
+    entries: [
+      {binding: 0, resource: { buffer: pc.gaussian_3d_buffer }},
+    ],
+  });
+
+  const gaussian_bind_group_render = device.createBindGroup({
+    label: 'point cloud gaussians bind group render',
     layout: render_pipeline.getBindGroupLayout(1), // layouts need to be exclusive so make the layout not owned by pipeline expilcitly deifne layouts
     entries: [
       {binding: 0, resource: { buffer: pc.gaussian_3d_buffer }},
@@ -119,9 +154,17 @@ export default function get_renderer(
     usage: GPUBufferUsage.STORAGE
   });
 
-  const splat_bind_group = device.createBindGroup({
-    label: 'splats bind group',
+  const splat_bind_group_preprocess = device.createBindGroup({
+    label: 'splats bind group preprocess',
     layout: preprocess_pipeline.getBindGroupLayout(3),
+    entries: [
+      {binding: 0, resource: {buffer: splat_buffer }}
+    ]
+  });
+
+  const splat_bind_group_render = device.createBindGroup({
+    label: 'splats bind group render',
+    layout: render_pipeline.getBindGroupLayout(2),
     entries: [
       {binding: 0, resource: {buffer: splat_buffer }}
     ]
@@ -163,12 +206,16 @@ export default function get_renderer(
   // ===============================================
   return {
     frame: (encoder: GPUCommandEncoder, texture_view: GPUTextureView) => {
+      // Reset key count & dispatch count
+      device.queue.writeBuffer(sorter.sort_info_buffer, 0, new Uint32Array([0]));
+      device.queue.writeBuffer(sorter.sort_dispatch_indirect_buffer, 0, new Uint32Array([0]));
+
       const compute_pass = encoder.beginComputePass();
       compute_pass.setPipeline(preprocess_pipeline);
-      compute_pass.setBindGroup(0, camera_bind_group);
-      compute_pass.setBindGroup(1, gaussian_bind_group);
+      compute_pass.setBindGroup(0, camera_bind_group_preprocess);
+      compute_pass.setBindGroup(1, gaussian_bind_group_preprocess);
       compute_pass.setBindGroup(2, sort_bind_group);
-      compute_pass.setBindGroup(3, splat_bind_group);
+      compute_pass.setBindGroup(3, splat_bind_group_preprocess);
 
       const workgroupCount = Math.ceil(pc.num_points/C.histogram_wg_size);
       compute_pass.dispatchWorkgroups(workgroupCount);
@@ -189,8 +236,9 @@ export default function get_renderer(
       });
 
       pass.setPipeline(render_pipeline);
-      pass.setBindGroup(0, camera_bind_group);
-      pass.setBindGroup(1, gaussian_bind_group);
+      pass.setBindGroup(0, camera_bind_group_render);
+      pass.setBindGroup(1, gaussian_bind_group_render);
+      pass.setBindGroup(2, splat_bind_group_render);
 
       pass.setVertexBuffer(0, vertex_buffer);
 

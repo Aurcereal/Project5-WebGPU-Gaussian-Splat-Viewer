@@ -19,6 +19,9 @@ var<uniform> camera: CameraUniforms;
 @group(1) @binding(0)
 var<storage,read> gaussians : array<Gaussian>;
 
+@group(2) @binding(0)
+var<storage,read> splats : array<Splat>;
+
 struct VertexInput {
     @location(0) pos: vec2f, // Local quad coordinate
     @builtin(instance_index) instance_id: u32
@@ -40,9 +43,10 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
 
     let gauss = gaussians[in.instance_id];
+    let splat = splats[in.instance_id];
     let a = unpack2x16float(gauss.pos_opacity[0]);
     let b = unpack2x16float(gauss.pos_opacity[1]);
-    let gaussian_pos = vec4<f32>(a.x, a.y, b.x, 1.);
+    let gaussian_pos = vec4<f32>(a.x+splat.temp_pos.x*0.000001, a.y, b.x, 1.);
 
     let gaussScaleA = unpack2x16float(gauss.scale[0]);
     let gaussScaleB = unpack2x16float(gauss.scale[1]);
