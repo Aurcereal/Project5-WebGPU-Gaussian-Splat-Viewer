@@ -46,7 +46,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     let splat = splats[in.instance_id];
     let a = unpack2x16float(gauss.pos_opacity[0]);
     let b = unpack2x16float(gauss.pos_opacity[1]);
-    let gaussian_pos = vec4<f32>(a.x+splat.temp_pos.x*0.000001, a.y, b.x, 1.);
+    let gaussian_pos = splat.temp_pos+0.0000001*vec4<f32>(a.x, a.y, b.x, 1.);
 
     let gaussScaleA = unpack2x16float(gauss.scale[0]);
     let gaussScaleB = unpack2x16float(gauss.scale[1]);

@@ -122,6 +122,9 @@ fn computeColorFromSH(dir: vec3<f32>, v_idx: u32, sh_deg: u32) -> vec3<f32> {
 @compute @workgroup_size(workgroupSize,1,1)
 fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) wgs: vec3<u32>) {
     let idx = gid.x;
+    if(idx > 272956) {
+        return;
+    }
     //TODO: set up pipeline as described in instruction
 
     let keys_per_dispatch = workgroupSize * sortKeyPerThread; 
@@ -134,10 +137,15 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
     var splat : Splat = Splat();
     let posXY = unpack2x16float(gauss.pos_opacity[0]);
     let posZOpacity = unpack2x16float(gauss.pos_opacity[1]);
-    splat.temp_pos = vec4(posXY, posZOpacity.x, 1.0)+camera.focal.x*0.00001;
+    var off = vec4(0.0,0.0,0.0,0.0);
+    let ind = atomicAdd(&sort_infos.keys_size, 1u);
+    if(ind > 272956) {
+        off.y += 10.0;
+    }
+    splat.temp_pos = vec4(posXY, posZOpacity.x, 1.0)+camera.focal.x*0.00001 + off;
 
     // Add splat data
-    let ind = 0u+sort_infos.passes % 2 ;//atomicAdd(&sort_infos.keys_size, 1u);
+    // TODO: Put ind here!
     splats[ind] = splat;
     sort_indices[ind] = ind;
     sort_depths[ind] = ind;
