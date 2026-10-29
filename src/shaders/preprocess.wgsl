@@ -19,6 +19,7 @@ const SH_C3 = array<f32,7>(
 
 override workgroupSize: u32;
 override sortKeyPerThread: u32;
+override numGaussians: u32;
 
 struct DispatchIndirect {
     dispatch_x: atomic<u32>,
@@ -41,7 +42,8 @@ struct CameraUniforms {
     proj: mat4x4<f32>,
     proj_inv: mat4x4<f32>,
     viewport: vec2<f32>,
-    focal: vec2<f32>
+    focal: vec2<f32> // Usually to project we have xProj = xCam / (z*tan(fov/2))
+                     // Then to get to pixel space we also mult Dim/2, focal just encodes all that in a multiplication
 };
 
 struct RenderSettings {
@@ -57,8 +59,9 @@ struct Gaussian {
 
 struct Splat {
     temp_pos: vec4f,
-    cov_inv_2D: mat2x2f,//TODO: store information for 2D splat rendering
-    mean_2D: vec2<f32>
+    cov_inv: vec3f,
+    mean_2D: vec2<f32>,
+    pixel_radius: f32
 };
 
 //TODO: bind your data here
@@ -119,10 +122,27 @@ fn computeColorFromSH(dir: vec3<f32>, v_idx: u32, sh_deg: u32) -> vec3<f32> {
     return  max(vec3<f32>(0.), result);
 }
 
+fn quatToRotationMatrix(q: vec4f) -> mat3x3f {
+    let r = q.x;
+	let x = q.y;
+	let y = q.z;
+	let z = q.w;
+
+    return mat3x3f(
+        1.f - 2.f * (y * y + z * z), 2.f * (x * y - r * z), 2.f * (x * z + r * y),
+        2.f * (x * y + r * z), 1.f - 2.f * (x * x + z * z), 2.f * (y * z - r * x),
+        2.f * (x * z - r * y), 2.f * (y * z + r * x), 1.f - 2.f * (x * x + y * y)
+    );
+}
+
+fn sigmoid(v: f32) -> f32 {
+    return 1.0 / (1.0 + exp(-v));
+}
+
 @compute @workgroup_size(workgroupSize,1,1)
 fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) wgs: vec3<u32>) {
     let idx = gid.x;
-    if(idx > 272956) {
+    if(idx > numGaussians) {
         return;
     }
     //TODO: set up pipeline as described in instruction
@@ -137,18 +157,57 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
     var splat : Splat = Splat();
     let posXY = unpack2x16float(gauss.pos_opacity[0]);
     let posZOpacity = unpack2x16float(gauss.pos_opacity[1]);
-    var off = vec4(0.0,0.0,0.0,0.0);
-    let ind = atomicAdd(&sort_infos.keys_size, 1u);
-    if(ind > 272956) {
-        off.y += 10.0;
-    }
-    splat.temp_pos = vec4(posXY, posZOpacity.x, 1.0)+camera.focal.x*0.00001 + off;
+    let gaussPos_world = vec4(posXY, posZOpacity.x, 1.0);
+    splat.temp_pos = vec4(posXY, posZOpacity.x, 1.0)+camera.focal.x*0.00001;
+    let rawScale = vec4(unpack2x16float(gauss.scale[0]), unpack2x16float(gauss.scale[1]));
+    let rotQuat = vec4(unpack2x16float(gauss.rot[0]), unpack2x16float(gauss.rot[1]));
+
+    //
+    let camera_view_3x3 = mat3x3f(camera.view[0].xyz, camera.view[1].xyz, camera.view[2].xyz);
+    let opacity = sigmoid(posZOpacity.y);
+    let scale = exp(rawScale);
+    // TODO: put render setting gauss mult here
+    let scaleMatrix = mat3x3f(scale.x, 0.0, 0.0, 0.0, scale.y, 0.0, 0.0, 0.0, scale.z);
+    let rotMatrix = quatToRotationMatrix(rotQuat);
+    let gaussPos_view = camera.view * gaussPos_world;
+    var gaussPos_screen = camera.proj * gaussPos_view;
+    gaussPos_screen /= gaussPos_screen.w;
+    splat.mean_2D = 0.5*gaussPos_screen.xy*vec2f(camera.viewport);
+
+    // Projection jacobian
+    let camZ = gaussPos_view.z;
+    let camZ2 = camZ*camZ;
+    let proj_jacobian = mat3x2(camera.focal.x / camZ, 0.0, 0.0, camera.focal.y / camZ, -camera.focal.x / camZ2, -camera.focal.y / camZ2); // Derivative of projection function f(x, y, z) -> (u, v)
+
+    //
+    let covar_3D_world = rotMatrix * scaleMatrix * transpose(scaleMatrix) * transpose(rotMatrix);
+    let covar_3D_view = camera_view_3x3 * covar_3D_world * transpose(camera_view_3x3);
+    var covar_2D_screen = proj_jacobian * covar_3D_world * transpose(proj_jacobian);
+
+    // covar += 0.3I (make sure invertible by making it positive definite NOT SEMI)
+    covar_2D_screen[0][0] += 0.3;
+    covar_2D_screen[1][1] += 0.3;
+
+    // Get det and encode cov as 3 floats since symmetric
+    let cov = vec3(covar_2D_screen[0][0], covar_2D_screen[1][0], covar_2D_screen[1][1]); // Cuz symmetric
+    let det = cov.x * cov.z - cov.y * cov.y;
+    
+    // Get eigenvalues for radius
+    let mid = 0.5 * (cov.x + cov.z);
+    let lambda1 = mid + sqrt(max(0.1, mid * mid - det)); // max to prevent -sqrt I think
+    let lambda2 = mid - sqrt(max(0.1, mid * mid - det));
+    // cov is PD so all eigens are positive
+    splat.pixel_radius = ceil(3.0 * sqrt(max(lambda1, lambda2)));
+
+    // Invert cov
+    let cov_inv = vec3(cov.z, -cov.y, cov.x)/det;
+    splat.cov_inv = cov_inv;
 
     // Add splat data
-    // TODO: Put ind here!
+    let ind = atomicAdd(&sort_infos.keys_size, 1u);
     splats[ind] = splat;
     sort_indices[ind] = ind;
-    sort_depths[ind] = ind;
+    sort_depths[ind] = bitcast<u32>(10000.-camZ); // Floats interpreted as u32 will maintain their ordering
 
     if(ind % keys_per_dispatch == 0) {
         atomicAdd(&sort_dispatch.dispatch_x, 1u);

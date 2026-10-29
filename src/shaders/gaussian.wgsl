@@ -20,6 +20,9 @@ var<uniform> camera: CameraUniforms;
 var<storage,read> gaussians : array<Gaussian>;
 
 @group(2) @binding(0)
+var<storage, read> sort_indices : array<u32>;
+
+@group(3) @binding(0)
 var<storage,read> splats : array<Splat>;
 
 struct VertexInput {
@@ -29,21 +32,32 @@ struct VertexInput {
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
+    @location(0) pixel_pos: vec2f,
     //TODO: information passed from vertex shader to fragment shader
+    @location(1) @interpolate(flat) instance_id: u32
 };
 
 struct Splat {
     temp_pos: vec4f,
-    cov_inv_2D: mat2x2f,
-    mean_2D: vec2<f32>
+    cov_inv: vec3f, // Symmetric mat2x2
+    mean_2D: vec2<f32>,
+    pixel_radius: f32
 };
+
+fn screenToPixel(scr: vec2f) -> vec2f {
+    return 0.5*scr*vec2f(camera.viewport);
+}
+
+fn pixelToScreen(pix: vec2f) -> vec2f {
+    return 2.0 * pix / vec2f(camera.viewport);
+}
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
 
-    let gauss = gaussians[in.instance_id];
-    let splat = splats[in.instance_id];
+    let gauss = gaussians[in.instance_id]; // TODO: DONT USE
+    let splat = splats[sort_indices[in.instance_id]];
     let a = unpack2x16float(gauss.pos_opacity[0]);
     let b = unpack2x16float(gauss.pos_opacity[1]);
     let gaussian_pos = splat.temp_pos+0.0000001*vec4<f32>(a.x, a.y, b.x, 1.);
@@ -54,14 +68,36 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     var local_pos = vec3(0.01*gaussScaleA*in.pos, 0.0);
     local_pos = (camera.view_inv * vec4(local_pos, 0.0)).xyz;
 
-    let world_vertex_pos = gaussian_pos + vec4(local_pos, 0.0);
+    let world_vertex_pos = gaussian_pos;// + vec4(local_pos, 0.0);
 
-    out.position = camera.proj * camera.view * world_vertex_pos;
+    var screen_gauss_pos = camera.proj * camera.view * world_vertex_pos;
+    // remember to do frustum culling
+
+    var pix_gauss_pos = screenToPixel(screen_gauss_pos.xy);
+    pix_gauss_pos += in.pos*splat.pixel_radius*abs(screen_gauss_pos.w);
+
+    screen_gauss_pos = vec4(pixelToScreen(pix_gauss_pos), screen_gauss_pos.zw);
+
+    out.position = screen_gauss_pos;
+
+    out.pixel_pos = vec2f(0.5*out.position.xy/out.position.w*vec2f(camera.viewport));
+
+    out.instance_id = in.instance_id;
 
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(1., 0., 0., 1.);
+    let splat = splats[sort_indices[in.instance_id]];
+    let uv = splat.mean_2D/vec2f(camera.viewport)+0.5;
+
+    let d = in.pixel_pos - splat.mean_2D;
+
+    // Expansion of r2 = d^T * cov_inv * d in gauss pdf = exp(-r2/2)
+    let r2 = splat.cov_inv.x * d.x * d.x + 2.0 * splat.cov_inv.y * d.x * d.y + splat.cov_inv.z * d.y * d.y;
+
+    let val = exp(-r2/2.0);
+
+    return vec4<f32>(val, 0.0, 0., 1.);
 }

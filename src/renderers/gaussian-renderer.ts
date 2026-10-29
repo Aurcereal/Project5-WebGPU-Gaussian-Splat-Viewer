@@ -61,11 +61,12 @@ export default function get_renderer(
       constants: {
         workgroupSize: C.histogram_wg_size,
         sortKeyPerThread: c_histogram_block_rows,
+        numGaussians: pc.num_points
       },
     },
   });
 
-  const sort_bind_group = device.createBindGroup({
+  const sort_bind_group_preprocess = device.createBindGroup({
     label: 'sort',
     layout: preprocess_pipeline.getBindGroupLayout(2),
     entries: [
@@ -172,10 +173,18 @@ export default function get_renderer(
 
   const splat_bind_group_render = device.createBindGroup({
     label: 'splats bind group render',
-    layout: render_pipeline.getBindGroupLayout(2),
+    layout: render_pipeline.getBindGroupLayout(3),
     entries: [
       {binding: 0, resource: {buffer: splat_buffer }}
     ]
+  });
+
+  const sort_bind_group_render = device.createBindGroup({
+    label: 'sort render bind group',
+    layout: render_pipeline.getBindGroupLayout(2),
+    entries: [
+      { binding: 0, resource: { buffer: sorter.ping_pong[0].sort_indices_buffer } }
+    ],
   });
 
   const indirect_buffer = device.createBuffer({
@@ -222,7 +231,7 @@ export default function get_renderer(
       compute_pass.setPipeline(preprocess_pipeline);
       compute_pass.setBindGroup(0, camera_bind_group_preprocess);
       compute_pass.setBindGroup(1, gaussian_bind_group_preprocess);
-      compute_pass.setBindGroup(2, sort_bind_group);
+      compute_pass.setBindGroup(2, sort_bind_group_preprocess);
       compute_pass.setBindGroup(3, splat_bind_group_preprocess);
 
       const workgroupCount = Math.ceil(pc.num_points/C.histogram_wg_size);
@@ -246,7 +255,8 @@ export default function get_renderer(
       pass.setPipeline(render_pipeline);
       pass.setBindGroup(0, camera_bind_group_render);
       pass.setBindGroup(1, gaussian_bind_group_render);
-      pass.setBindGroup(2, splat_bind_group_render);
+      pass.setBindGroup(2, sort_bind_group_render);
+      pass.setBindGroup(3, splat_bind_group_render);
 
       pass.setVertexBuffer(0, vertex_buffer);
 
