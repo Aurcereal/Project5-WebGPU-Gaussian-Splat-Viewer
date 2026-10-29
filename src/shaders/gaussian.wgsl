@@ -99,5 +99,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let val = exp(-r2/2.0);
 
-    return vec4<f32>(val, 0.0, 0., 1.);
+    return vec4<f32>(val, 0.0, 0., val);
 }

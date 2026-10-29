@@ -142,7 +142,7 @@ fn sigmoid(v: f32) -> f32 {
 @compute @workgroup_size(workgroupSize,1,1)
 fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) wgs: vec3<u32>) {
     let idx = gid.x;
-    if(idx > numGaussians) {
+    if(idx >= numGaussians) {
         return;
     }
     //TODO: set up pipeline as described in instruction
@@ -198,6 +198,15 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
     let lambda2 = mid - sqrt(max(0.1, mid * mid - det));
     // cov is PD so all eigens are positive
     splat.pixel_radius = ceil(3.0 * sqrt(max(lambda1, lambda2)));
+
+    // Check within frustum using pixel_radius as bounding box
+    let diff = abs(splat.mean_2D) - 0.5*vec2f(camera.viewport) - splat.pixel_radius;
+    if(
+        gaussPos_screen.z < 0. || gaussPos_screen.z > 1. || // Z Condition
+        diff.x > 0. || diff.y > 0.
+    ) {
+        return;
+    }
 
     // Invert cov
     let cov_inv = vec3(cov.z, -cov.y, cov.x)/det;

@@ -114,7 +114,21 @@ export default function get_renderer(
     fragment: {
       module: render_shader,
       entryPoint: 'fs_main',
-      targets: [{format: presentation_format }]
+      targets: [{
+        format: presentation_format,
+        blend: {
+          color: {
+            srcFactor: "src-alpha",
+            dstFactor: "one-minus-src-alpha",
+            operation: "add",
+          },
+          alpha: {
+            srcFactor: "one",
+            dstFactor: "one-minus-src-alpha",
+            operation: "add",
+          }
+        }
+      }]
     },
     primitive: {
       topology: 'triangle-list'
@@ -190,7 +204,7 @@ export default function get_renderer(
   const indirect_buffer = device.createBuffer({
     label: 'indirect buffer',
     size: 16,
-    usage: GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST,
+    usage: GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
   });
 
   device.queue.writeBuffer(indirect_buffer, 0, new Uint32Array([
@@ -227,6 +241,7 @@ export default function get_renderer(
       device.queue.writeBuffer(sorter.sort_info_buffer, 0, new Uint32Array([0]));
       device.queue.writeBuffer(sorter.sort_dispatch_indirect_buffer, 0, new Uint32Array([0]));
 
+      // Created splatted gaussian data
       const compute_pass = encoder.beginComputePass();
       compute_pass.setPipeline(preprocess_pipeline);
       compute_pass.setBindGroup(0, camera_bind_group_preprocess);
@@ -239,8 +254,13 @@ export default function get_renderer(
 
       compute_pass.end();
 
+      // Set drawing instanceCount = keyCount (the number of visible gaussians)
+      encoder.copyBufferToBuffer(sorter.sort_info_buffer, 0, indirect_buffer, 4, 4);
+
+      // Sort
       sorter.sort(encoder);
 
+      // Render gaussians
       const pass = encoder.beginRenderPass({
         label: 'gaussian test render',
         colorAttachments: [
