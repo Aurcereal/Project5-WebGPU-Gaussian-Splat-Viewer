@@ -10,6 +10,7 @@ import { time, timeReturn } from '../utils/simple-console';
 export interface Renderer {
   frame: (encoder: GPUCommandEncoder, texture_view: GPUTextureView) => void,
   camera_buffer: GPUBuffer,
+  render_settings: GPUBuffer,
 }
 
 export default async function init(
@@ -43,6 +44,11 @@ export default async function init(
     alphaMode: 'opaque',
   });
   
+  const render_settings_buffer = device.createBuffer({
+    label: "render settings buffer",
+    size: 16,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+  });
 
   // Tweakpane: easily adding tweak control for parameters.
   const params = {
@@ -84,9 +90,10 @@ export default async function init(
       const uploadedFile = file.value;
       if (uploadedFile) {
         const pc = await load(uploadedFile, device);
-        console.log("before..");
+        device.queue.writeBuffer(render_settings_buffer, 0, new Float32Array([params.gaussian_multiplier, pc.sh_deg]));
+
         pointcloud_renderer = get_renderer_pointcloud(pc, device, presentation_format, camera.uniform_buffer);
-        gaussian_renderer = get_renderer_gaussian(pc, device, presentation_format, camera.uniform_buffer);
+        gaussian_renderer = get_renderer_gaussian(pc, device, presentation_format, camera.uniform_buffer, render_settings_buffer);
         renderers = {
           pointcloud: pointcloud_renderer,
           gaussian: gaussian_renderer,
@@ -122,7 +129,7 @@ export default async function init(
       'gaussian_multiplier',
       {min: 0, max: 1.5}
     ).on('change', (e) => {
-      gaussian_renderer.update_gaussian_scaling();
+      device.queue.writeBuffer(render_settings_buffer, 0, new Float32Array([params.gaussian_multiplier]));
     });
   }
 

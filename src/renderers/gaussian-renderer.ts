@@ -38,6 +38,7 @@ export default function get_renderer(
   device: GPUDevice,
   presentation_format: GPUTextureFormat,
   camera_buffer: GPUBuffer,
+  render_settings_buffer: GPUBuffer
 ): GaussianRenderer {
 
   console.log("shouldn't be here");
@@ -126,13 +127,6 @@ export default function get_renderer(
     entries: [{binding: 0, resource: { buffer: camera_buffer }}],
   });
 
-    const render_settings_buffer = device.createBuffer({
-    label: "render settings buffer",
-    size: 16,
-    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
-  });
-  device.queue.writeBuffer(render_settings_buffer, 0, new Float32Array([1.0, pc.sh_deg]));
-
   const gaussian_bind_group_preprocess = device.createBindGroup({
     label: 'point cloud gaussians bind group preprocess',
     layout: preprocess_pipeline.getBindGroupLayout(1), // layouts need to be exclusive so make the layout not owned by pipeline expilcitly deifne layouts
@@ -181,7 +175,7 @@ export default function get_renderer(
 
   device.queue.writeBuffer(indirect_buffer, 0, new Uint32Array([
     6, pc.num_points, 0, 0 // NumVerts, NumInstances, StartVertex, StartInstance
-  ])); // TODO make instances
+  ]));
 
 
   const vertex_array = new Float32Array([
