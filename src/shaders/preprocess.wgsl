@@ -58,18 +58,23 @@ struct Gaussian {
 };
 
 struct Splat {
-    temp_pos: vec4f,
+    screen_pos: vec4f,
     cov_inv: vec3f,
     mean_2D: vec2<f32>,
-    pixel_radius: f32
+    pixel_radius: f32,
+    opacity: f32,
+    col: vec3f
 };
 
-//TODO: bind your data here
 @group(0) @binding(0)
 var<uniform> camera: CameraUniforms;
 
 @group(1) @binding(0)
 var<storage,read> gaussians : array<Gaussian>;
+@group(1) @binding(1)
+var<storage, read> sh_coeffs : array<u32>;
+@group(1) @binding(2)
+var<uniform> render_settings: RenderSettings;
 
 @group(2) @binding(0)
 var<storage, read_write> sort_infos: SortInfos;
@@ -86,7 +91,17 @@ var<storage,read_write> splats : array<Splat>;
 /// reads the ith sh coef from the storage buffer 
 fn sh_coef(splat_idx: u32, c_idx: u32) -> vec3<f32> {
     //TODO: access your binded sh_coeff, see load.ts for how it is stored
-    return vec3<f32>(0.0);
+    let start_index = splat_idx * 16 * 3 + c_idx * 3;
+    
+    let converted_index = start_index/2;
+    let mod_index = start_index%2;
+
+    let sh_piece_1 = unpack2x16float(sh_coeffs[converted_index]);
+    let sh_piece_2 = unpack2x16float(sh_coeffs[converted_index+1]);
+    let full_sh = vec4(sh_piece_1, sh_piece_2);
+    let sh = select(full_sh.yzw, full_sh.xyz, mod_index == 0);
+
+    return sh;
 }
 
 // spherical harmonics evaluation with Condon–Shortley phase
@@ -139,6 +154,10 @@ fn sigmoid(v: f32) -> f32 {
     return 1.0 / (1.0 + exp(-v));
 }
 
+fn offset_pos(p: vec3f) -> vec3f {
+    return p;
+}
+
 @compute @workgroup_size(workgroupSize,1,1)
 fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) wgs: vec3<u32>) {
     let idx = gid.x;
@@ -148,7 +167,6 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
     //TODO: set up pipeline as described in instruction
 
     let keys_per_dispatch = workgroupSize * sortKeyPerThread; 
-    // increment DispatchIndirect.dispatchx each time you reach limit for one dispatch of keys
 
     // Get gaussian data
     let gauss = gaussians[idx];
@@ -157,32 +175,35 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
     var splat : Splat = Splat();
     let posXY = unpack2x16float(gauss.pos_opacity[0]);
     let posZOpacity = unpack2x16float(gauss.pos_opacity[1]);
-    let gaussPos_world = vec4(posXY, posZOpacity.x, 1.0);
-    splat.temp_pos = vec4(posXY, posZOpacity.x, 1.0)+camera.focal.x*0.00001;
+    var gaussPos_world = vec4(posXY, posZOpacity.x, 1.0);
     let rawScale = vec4(unpack2x16float(gauss.scale[0]), unpack2x16float(gauss.scale[1]));
     let rotQuat = vec4(unpack2x16float(gauss.rot[0]), unpack2x16float(gauss.rot[1]));
 
     //
+    let camera_pos = camera.view_inv[3].xyz;
     let camera_view_3x3 = mat3x3f(camera.view[0].xyz, camera.view[1].xyz, camera.view[2].xyz);
     let opacity = sigmoid(posZOpacity.y);
-    let scale = exp(rawScale);
-    // TODO: put render setting gauss mult here
+    let scale = render_settings.gaussian_scaling * exp(rawScale);
     let scaleMatrix = mat3x3f(scale.x, 0.0, 0.0, 0.0, scale.y, 0.0, 0.0, 0.0, scale.z);
     let rotMatrix = quatToRotationMatrix(rotQuat);
     let gaussPos_view = camera.view * gaussPos_world;
     var gaussPos_screen = camera.proj * gaussPos_view;
-    gaussPos_screen /= gaussPos_screen.w;
+    let proj_w = gaussPos_screen.w;
+    gaussPos_screen /= proj_w;
     splat.mean_2D = 0.5*gaussPos_screen.xy*vec2f(camera.viewport);
+    splat.opacity = opacity;
+    splat.screen_pos = gaussPos_screen;
+    splat.col = computeColorFromSH(normalize(gaussPos_world.xyz - camera_pos), idx, 0u);
 
     // Projection jacobian
     let camZ = gaussPos_view.z;
     let camZ2 = camZ*camZ;
-    let proj_jacobian = mat3x2(camera.focal.x / camZ, 0.0, 0.0, camera.focal.y / camZ, -camera.focal.x / camZ2, -camera.focal.y / camZ2); // Derivative of projection function f(x, y, z) -> (u, v)
+    let proj_jacobian = mat3x2(camera.focal.x / camZ, 0.0, 0.0, camera.focal.y / camZ, -camera.focal.x * gaussPos_view.x / camZ2, -camera.focal.y * gaussPos_view.y / camZ2); // Derivative of projection function f(x, y, z) -> (u, v)
 
     //
     let covar_3D_world = rotMatrix * scaleMatrix * transpose(scaleMatrix) * transpose(rotMatrix);
     let covar_3D_view = camera_view_3x3 * covar_3D_world * transpose(camera_view_3x3);
-    var covar_2D_screen = proj_jacobian * covar_3D_world * transpose(proj_jacobian);
+    var covar_2D_screen = proj_jacobian * covar_3D_view * transpose(proj_jacobian);
 
     // covar += 0.3I (make sure invertible by making it positive definite NOT SEMI)
     covar_2D_screen[0][0] += 0.3;
@@ -203,7 +224,8 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
     let diff = abs(splat.mean_2D) - 0.5*vec2f(camera.viewport) - splat.pixel_radius;
     if(
         gaussPos_screen.z < 0. || gaussPos_screen.z > 1. || // Z Condition
-        diff.x > 0. || diff.y > 0.
+        diff.x > 0. || diff.y > 0. || 
+        proj_w <= 0.
     ) {
         return;
     }
@@ -214,6 +236,7 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
 
     // Add splat data
     let ind = atomicAdd(&sort_infos.keys_size, 1u);
+    if(ind >= numGaussians) { splat.col = vec3f(10.0,0.0,0.0); }
     splats[ind] = splat;
     sort_indices[ind] = ind;
     sort_depths[ind] = bitcast<u32>(10000.-camZ); // Floats interpreted as u32 will maintain their ordering

@@ -38,10 +38,12 @@ struct VertexOutput {
 };
 
 struct Splat {
-    temp_pos: vec4f,
+    screen_pos: vec4f,
     cov_inv: vec3f, // Symmetric mat2x2
     mean_2D: vec2<f32>,
-    pixel_radius: f32
+    pixel_radius: f32,
+    opacity: f32,
+    col: vec3f
 };
 
 fn screenToPixel(scr: vec2f) -> vec2f {
@@ -56,29 +58,14 @@ fn pixelToScreen(pix: vec2f) -> vec2f {
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
 
-    let gauss = gaussians[in.instance_id]; // TODO: DONT USE
     let splat = splats[sort_indices[in.instance_id]];
-    let a = unpack2x16float(gauss.pos_opacity[0]);
-    let b = unpack2x16float(gauss.pos_opacity[1]);
-    let gaussian_pos = splat.temp_pos+0.0000001*vec4<f32>(a.x, a.y, b.x, 1.);
+    let splat_screen_pos = splat.screen_pos;
 
-    let gaussScaleA = unpack2x16float(gauss.scale[0]);
-    let gaussScaleB = unpack2x16float(gauss.scale[1]);
+    var pix_gauss_pos = screenToPixel(splat_screen_pos.xy);
+    pix_gauss_pos += in.pos*splat.pixel_radius;
+    let corner = vec4(pixelToScreen(pix_gauss_pos), splat_screen_pos.zw);
 
-    var local_pos = vec3(0.01*gaussScaleA*in.pos, 0.0);
-    local_pos = (camera.view_inv * vec4(local_pos, 0.0)).xyz;
-
-    let world_vertex_pos = gaussian_pos;// + vec4(local_pos, 0.0);
-
-    var screen_gauss_pos = camera.proj * camera.view * world_vertex_pos;
-    // remember to do frustum culling
-
-    var pix_gauss_pos = screenToPixel(screen_gauss_pos.xy);
-    pix_gauss_pos += in.pos*splat.pixel_radius*abs(screen_gauss_pos.w);
-
-    screen_gauss_pos = vec4(pixelToScreen(pix_gauss_pos), screen_gauss_pos.zw);
-
-    out.position = screen_gauss_pos;
+    out.position = corner;
 
     out.pixel_pos = vec2f(0.5*out.position.xy/out.position.w*vec2f(camera.viewport));
 
@@ -97,7 +84,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Expansion of r2 = d^T * cov_inv * d in gauss pdf = exp(-r2/2)
     let r2 = splat.cov_inv.x * d.x * d.x + 2.0 * splat.cov_inv.y * d.x * d.y + splat.cov_inv.z * d.y * d.y;
 
-    let val = exp(-r2/2.0);
+    let val = exp(-r2/2.0)*splat.opacity;
 
-    return vec4<f32>(val, 0.0, 0., val);
+    return vec4<f32>(splat.col, val);
 }

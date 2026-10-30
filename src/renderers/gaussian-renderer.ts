@@ -81,27 +81,6 @@ export default function get_renderer(
   // ===============================================
   //    Create Render Pipeline and Bind Groups
   // ===============================================
-  // const camera_bind_group_layout = device.createBindGroupLayout({
-  //   label: "camera bind group layout",
-  //   entries: [
-  //     { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.COMPUTE, buffer: {type: "uniform"}}
-  //   ]
-  // });
-
-  // const gaussian_bind_group_layout = device.createBindGroupLayout({
-  //   label: "gaussian bind group layout",
-  //   entries: [
-  //     { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.COMPUTE, buffer: {type: "storage"}}
-  //   ]
-  // });
-
-  // const splat_bind_group_layout = device.createBindGroupLayout({
-  //   label: "splat bind group layout",
-  //   entries: [
-  //     { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.COMPUTE, buffer: {type: "storage"}}
-  //   ]
-  // });
-
   const render_shader = device.createShaderModule({code: renderWGSL});
   const render_pipeline = device.createRenderPipeline({
     label: 'gaussian test render pipeline',
@@ -133,7 +112,7 @@ export default function get_renderer(
     primitive: {
       topology: 'triangle-list'
     }
-  })
+  });
 
   const camera_bind_group_preprocess = device.createBindGroup({
     label: 'point cloud camera preprocess',
@@ -147,25 +126,26 @@ export default function get_renderer(
     entries: [{binding: 0, resource: { buffer: camera_buffer }}],
   });
 
+    const render_settings_buffer = device.createBuffer({
+    label: "render settings buffer",
+    size: 16,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+  });
+  device.queue.writeBuffer(render_settings_buffer, 0, new Float32Array([1.0, pc.sh_deg]));
+
   const gaussian_bind_group_preprocess = device.createBindGroup({
     label: 'point cloud gaussians bind group preprocess',
     layout: preprocess_pipeline.getBindGroupLayout(1), // layouts need to be exclusive so make the layout not owned by pipeline expilcitly deifne layouts
     entries: [
       {binding: 0, resource: { buffer: pc.gaussian_3d_buffer }},
-    ],
-  });
-
-  const gaussian_bind_group_render = device.createBindGroup({
-    label: 'point cloud gaussians bind group render',
-    layout: render_pipeline.getBindGroupLayout(1), // layouts need to be exclusive so make the layout not owned by pipeline expilcitly deifne layouts
-    entries: [
-      {binding: 0, resource: { buffer: pc.gaussian_3d_buffer }},
+      {binding: 1, resource: { buffer: pc.sh_buffer }},
+      {binding: 2, resource: { buffer: render_settings_buffer}}
     ],
   });
 
   const splat_buffer = device.createBuffer({
     label: 'splat buffer',
-    size: pc.num_points * 48,
+    size: pc.num_points * 52,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
   });
   let startSplatArr = new Float32Array(pc.num_points * 12);
@@ -274,7 +254,6 @@ export default function get_renderer(
 
       pass.setPipeline(render_pipeline);
       pass.setBindGroup(0, camera_bind_group_render);
-      pass.setBindGroup(1, gaussian_bind_group_render);
       pass.setBindGroup(2, sort_bind_group_render);
       pass.setBindGroup(3, splat_bind_group_render);
 
@@ -285,4 +264,9 @@ export default function get_renderer(
     },
     camera_buffer,
   };
+}
+
+
+function update_gaussian_scaling() {
+
 }
