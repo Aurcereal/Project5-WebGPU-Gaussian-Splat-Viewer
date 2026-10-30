@@ -1,3 +1,7 @@
+
+
+
+
 # Project5-WebGPU-Gaussian-Splat-Viewer
 
 **University of Pennsylvania, CIS 565: GPU Programming and Architecture, Project 5**
@@ -14,7 +18,7 @@
 
 ![](ShowcaseMedia/dark_bonsai.png)
 
-VIDEO HERE
+https://github.com/user-attachments/assets/eb9c420b-f4e7-4801-9726-75551a3ed1b4
 
 ### Live Demo
 
