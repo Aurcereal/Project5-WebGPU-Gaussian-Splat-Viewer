@@ -49,6 +49,7 @@ struct CameraUniforms {
 struct RenderSettings {
     gaussian_scaling: f32,
     sh_deg: f32,
+    dt: f32,
 }
 
 struct Gaussian {
@@ -164,7 +165,7 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
     if(idx >= numGaussians) {
         return;
     }
-    
+
     let keys_per_dispatch = workgroupSize * sortKeyPerThread; 
 
     // Get gaussian data

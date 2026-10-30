@@ -97,7 +97,7 @@ export default async function init(
       const uploadedFile = file.value;
       if (uploadedFile) {
         const pc = await load(uploadedFile, device);
-        device.queue.writeBuffer(render_settings_buffer, 0, new Float32Array([params.gaussian_multiplier, pc.sh_deg]));
+        device.queue.writeBuffer(render_settings_buffer, 0, new Float32Array([params.gaussian_multiplier, pc.sh_deg, 10.0]));
 
         pointcloud_renderer = get_renderer_pointcloud(pc, device, presentation_format, camera.uniform_buffer);
         gaussian_renderer = get_renderer_gaussian(pc, device, presentation_format, camera.uniform_buffer, render_settings_buffer, param_arr);
@@ -167,9 +167,27 @@ export default async function init(
     }
   });
 
+  var accum_dt = 0.0;
+  var accum_frame = 0.0;
+
+  var curr_time = performance.now();
+
   function frame() {
     if (ply_file_loaded && cam_file_loaded) {
-      params.fps=1.0/timeReturn()*1000.0;
+      params.fps=1.0/(timeReturn()*1000.0);
+      var dt = performance.now() - curr_time;
+      curr_time = performance.now();
+
+      accum_frame += 1.0;
+      accum_dt += dt;
+      if(accum_frame >= 60) {
+        var avg_dt = accum_dt/accum_frame;
+        console.log(avg_dt);
+        accum_frame = 0.0;
+        accum_dt = 0.0;
+      }
+      device.queue.writeBuffer(render_settings_buffer, 8, new Float32Array([dt]));
+
       params.frame_time = timeReturn(); // ms
       time();
       const encoder = device.createCommandEncoder();
