@@ -38,7 +38,8 @@ export default function get_renderer(
   device: GPUDevice,
   presentation_format: GPUTextureFormat,
   camera_buffer: GPUBuffer,
-  render_settings_buffer: GPUBuffer
+  render_settings_buffer: GPUBuffer,
+  param_arr: Float32Array
 ): GaussianRenderer {
 
   console.log("shouldn't be here");
@@ -215,7 +216,9 @@ export default function get_renderer(
       compute_pass.setBindGroup(2, sort_bind_group_preprocess);
       compute_pass.setBindGroup(3, splat_bind_group_preprocess);
 
-      const workgroupCount = Math.ceil(pc.num_points/C.histogram_wg_size);
+      const num_points = param_arr[0] > 0.99 ? pc.num_points : param_arr[0]*pc.num_points;
+      console.log("Show Percentage: " + param_arr[0] + " Num Points: " + num_points);
+      const workgroupCount = Math.ceil(num_points/C.histogram_wg_size);
       compute_pass.dispatchWorkgroups(workgroupCount);
 
       compute_pass.end();
