@@ -145,17 +145,9 @@ export default function get_renderer(
 
   const splat_buffer = device.createBuffer({
     label: 'splat buffer',
-    size: pc.num_points * 52,
+    size: pc.num_points * 64,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
   });
-  let startSplatArr = new Float32Array(pc.num_points * 12);
-  for(var i = 0; i<pc.num_points; i++) {
-    startSplatArr[i * 12 + 0] = i;
-    startSplatArr[i * 12 + 1] = 0;
-    startSplatArr[i * 12 + 2] = 0;
-    startSplatArr[i * 12 + 3] = 1;
-  }
-  device.queue.writeBuffer(splat_buffer, 0, startSplatArr);
 
   const splat_bind_group_preprocess = device.createBindGroup({
     label: 'splats bind group preprocess',
@@ -247,6 +239,7 @@ export default function get_renderer(
           {
             view: texture_view,
             loadOp: 'clear',
+            clearValue: [0.0,0.0,0.0,0.0],
             storeOp: 'store',
           }
         ],

@@ -43,7 +43,7 @@ struct Splat {
     mean_2D: vec2<f32>,
     pixel_radius: f32,
     opacity: f32,
-    col: vec3f
+    col: vec4f
 };
 
 fn screenToPixel(scr: vec2f) -> vec2f {
@@ -82,9 +82,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let d = in.pixel_pos - splat.mean_2D;
 
     // Expansion of r2 = d^T * cov_inv * d in gauss pdf = exp(-r2/2)
-    let r2 = splat.cov_inv.x * d.x * d.x + 2.0 * splat.cov_inv.y * d.x * d.y + splat.cov_inv.z * d.y * d.y;
+    let cov_inv = mat2x2f(splat.cov_inv.x, splat.cov_inv.y, splat.cov_inv.y, splat.cov_inv.z);
+    let r2 = dot(d,cov_inv * d);//let r2 = splat.cov_inv.x * d.x * d.x + 2.0 * splat.cov_inv.y * d.x * d.y + splat.cov_inv.z * d.y * d.y;
 
-    let val = exp(-r2/2.0)*splat.opacity;
+    let alpha = exp(-r2/2.0)*splat.opacity;
 
-    return vec4<f32>(splat.col, val);
+    if(alpha < 0.001) { discard; }
+
+    return vec4<f32>(splat.col.rgb, alpha);
 }

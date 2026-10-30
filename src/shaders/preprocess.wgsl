@@ -63,7 +63,7 @@ struct Splat {
     mean_2D: vec2<f32>,
     pixel_radius: f32,
     opacity: f32,
-    col: vec3f
+    col: vec4f
 };
 
 @group(0) @binding(0)
@@ -143,11 +143,11 @@ fn quatToRotationMatrix(q: vec4f) -> mat3x3f {
 	let y = q.z;
 	let z = q.w;
 
-    return mat3x3f(
+    return transpose(mat3x3f(
         1.f - 2.f * (y * y + z * z), 2.f * (x * y - r * z), 2.f * (x * z + r * y),
         2.f * (x * y + r * z), 1.f - 2.f * (x * x + z * z), 2.f * (y * z - r * x),
         2.f * (x * z - r * y), 2.f * (y * z + r * x), 1.f - 2.f * (x * x + y * y)
-    );
+    ));
 }
 
 fn sigmoid(v: f32) -> f32 {
@@ -164,8 +164,7 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
     if(idx >= numGaussians) {
         return;
     }
-    //TODO: set up pipeline as described in instruction
-
+    
     let keys_per_dispatch = workgroupSize * sortKeyPerThread; 
 
     // Get gaussian data
@@ -179,31 +178,44 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
     let rawScale = vec4(unpack2x16float(gauss.scale[0]), unpack2x16float(gauss.scale[1]));
     let rotQuat = vec4(unpack2x16float(gauss.rot[0]), unpack2x16float(gauss.rot[1]));
 
-    //
-    let camera_pos = camera.view_inv[3].xyz;
-    let camera_view_3x3 = mat3x3f(camera.view[0].xyz, camera.view[1].xyz, camera.view[2].xyz);
+    // Opacity
     let opacity = sigmoid(posZOpacity.y);
-    let scale = render_settings.gaussian_scaling * exp(rawScale);
-    let scaleMatrix = mat3x3f(scale.x, 0.0, 0.0, 0.0, scale.y, 0.0, 0.0, 0.0, scale.z);
-    let rotMatrix = quatToRotationMatrix(rotQuat);
+    splat.opacity = opacity;
+
+    // Positions
     let gaussPos_view = camera.view * gaussPos_world;
     var gaussPos_screen = camera.proj * gaussPos_view;
     let proj_w = gaussPos_screen.w;
     gaussPos_screen /= proj_w;
     splat.mean_2D = 0.5*gaussPos_screen.xy*vec2f(camera.viewport);
-    splat.opacity = opacity;
     splat.screen_pos = gaussPos_screen;
-    splat.col = computeColorFromSH(normalize(gaussPos_world.xyz - camera_pos), idx, 0u);
 
-    // Projection jacobian
+    // Color
+    let camera_pos = camera.view_inv[3].xyz;
+    splat.col = vec4(computeColorFromSH(normalize(gaussPos_world.xyz - camera_pos), idx, 3u), 0.0);
+
+    // Covar World
+    let scale = render_settings.gaussian_scaling * exp(rawScale.xyz);
+    let scaleMatrix = mat3x3f(
+        scale.x, 0.0, 0.0, 
+        0.0, scale.y, 0.0, 
+        0.0, 0.0, scale.z
+        );
+    let rotMatrix = quatToRotationMatrix(normalize(rotQuat));
+    let covar_3D_world =  rotMatrix * scaleMatrix * transpose(scaleMatrix) * transpose(rotMatrix);
+
+    // Covar screen
+    let camera_view_3x3 = mat3x3f(camera.view[0].xyz, camera.view[1].xyz, camera.view[2].xyz);
     let camZ = gaussPos_view.z;
     let camZ2 = camZ*camZ;
-    let proj_jacobian = mat3x2(camera.focal.x / camZ, 0.0, 0.0, camera.focal.y / camZ, -camera.focal.x * gaussPos_view.x / camZ2, -camera.focal.y * gaussPos_view.y / camZ2); // Derivative of projection function f(x, y, z) -> (u, v)
+    let proj_jacobian = mat3x2(
+        camera.focal.x / camZ, 0.0, 
+        0.0, -camera.focal.y / camZ, 
+        -camera.focal.x * gaussPos_view.x / camZ2, camera.focal.y * gaussPos_view.y / camZ2
+        ); // Derivative of projection function f(x, y, z) -> (u, v) where projection matrix flips y
+    let T = proj_jacobian * camera_view_3x3;
 
-    //
-    let covar_3D_world = rotMatrix * scaleMatrix * transpose(scaleMatrix) * transpose(rotMatrix);
-    let covar_3D_view = camera_view_3x3 * covar_3D_world * transpose(camera_view_3x3);
-    var covar_2D_screen = proj_jacobian * covar_3D_view * transpose(proj_jacobian);
+    var covar_2D_screen = T * covar_3D_world * transpose(T);
 
     // covar += 0.3I (make sure invertible by making it positive definite NOT SEMI)
     covar_2D_screen[0][0] += 0.3;
@@ -221,11 +233,12 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
     splat.pixel_radius = ceil(3.0 * sqrt(max(lambda1, lambda2)));
 
     // Check within frustum using pixel_radius as bounding box
-    let diff = abs(splat.mean_2D) - 0.5*vec2f(camera.viewport) - splat.pixel_radius;
+    let diff = abs(splat.mean_2D) - 0.6*vec2f(camera.viewport);// - splat.pixel_radius;
     if(
         gaussPos_screen.z < 0. || gaussPos_screen.z > 1. || // Z Condition
         diff.x > 0. || diff.y > 0. || 
-        proj_w <= 0.
+        proj_w <= 0. ||
+        det <= 0.
     ) {
         return;
     }
@@ -236,7 +249,6 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
 
     // Add splat data
     let ind = atomicAdd(&sort_infos.keys_size, 1u);
-    if(ind >= numGaussians) { splat.col = vec3f(10.0,0.0,0.0); }
     splats[ind] = splat;
     sort_indices[ind] = ind;
     sort_depths[ind] = bitcast<u32>(10000.-camZ); // Floats interpreted as u32 will maintain their ordering
